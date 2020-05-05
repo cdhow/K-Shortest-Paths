@@ -1,7 +1,9 @@
 #include <iostream>
 #include <vector>
+#include <queue>
 #include <fstream>
 #include <cfloat>
+#include <memory>
 
 /**
  * Algorithm
@@ -21,13 +23,18 @@
  * - Perform A* for each node's heuristic in that previous path equalling infinity
  * - take the shortest path from that calculation
  * - Repeat this process K times on the new shortest path
+ *
+ * Note: I would usually split this program into multiple files, but
+ * for simplicity for the marker I'll keep it all in the single file
  */
 
+
 // Loads the data from the specified input input file
-// into an adjacency matrix
-std::vector<std::vector<double>> load_matrix(std::string &infile)
+// into an adjacency matrix, returns a tuple of, (src, dst, matrix)
+std::tuple<int, int, std::vector<std::vector<double>>> load_matrix(std::string &infile)
 {
-    std::ifstream f(infile);
+    std::ifstream f;
+    f.open(infile);
     if (!f.good()) std::cerr << "File does not exist: " + infile;
     std::string line;
 
@@ -40,15 +47,26 @@ std::vector<std::vector<double>> load_matrix(std::string &infile)
     // Adjacency matrix of nodes from the input file
     std::vector<std::vector<double>> matrix(n_v, std::vector<double>(n_v, 0));
 
-    // node a, node b, weight of edge between them]
+    // node a, node b
     int a = 0, b = 0;
+    // weight of edge between a, b
     double w = 0;
+    // source and destination nodes
+    int src = 0, dst = 0;
 
-    while(std::getline(f,line)) {
+    int lineNum = 1;
+    while(lineNum <= n_e+1) {
+        std::getline(f,line);
         f >> a >> b >> w;
         matrix[a][b] = w;
+        lineNum++;
     }
-    return matrix;
+
+    // Last line contains src and dst
+    f >> src >> dst;
+    f.close();
+
+    return std::make_tuple(src, dst, matrix);
 }
 
 // Takes a matrix as a param and return a transposed copy of that matrix
@@ -121,14 +139,140 @@ std::vector<double> dijkstra(std::vector<std::vector<double>> &matrix, int src)
     return dist;
 }
 
+
+/*
+ * ###################### This region is for part 2 ###############################
+ */
+
+
+// A node (state) that will store the it's path
+// and cost function for the A* algorithm
+class Node {
+private:
+    int id;
+
+    // Cost function value. i.e g(n) = f(n) + h(n),
+    // where f(n) = pathCost and h(n) = heuristic
+    double g{0};
+
+    // Current path cost from source node
+    // to this node
+    double pathCost{0};
+
+    // Pointer to parent node
+    Node *parent{nullptr};
+public:
+    Node() : id{0} {}
+    explicit Node(const int &id) :id{id} {}
+
+
+    int getID() const { return id; }
+
+    double getPathCost() const { return pathCost; }
+
+    double getG() const { return g; }
+
+    Node* getParent()
+    {
+        return parent;
+    }
+
+    // Update the path cost and the g-value
+    void update_costs(const double &pCost, const double &heuristic)
+    {
+        pathCost = pCost;
+        g = pCost + heuristic;
+    }
+
+    // Set the parent node
+    void update_parent(Node *p)
+    {
+        parent = p;
+    }
+
+};
+
+// Functor struct to order a priority queue bt a Node's g - value
+struct LessThanByG
+{
+    bool operator()(const Node* lhs, const Node* rhs)
+    {
+        return lhs->getG() < rhs->getG();
+    }
+};
+
+
 // TODO: A*
-std::vector<int> astar(std::vector<std::vector<int>> &matrix, std::vector<int> &heuristic)
+std::pair<double, std::vector<int>> astar(
+        std::vector<std::vector<double>> &matrix,
+        std::vector<double> &heuristic,
+        const int &src,
+        const int &dest)
 {
 
+    // Vector that contains All node objects
+    std::vector<Node*> nodes;
+
+    // Populate nodes vector
+    // Nodes are labelled 0 to number of nodes
+    nodes.reserve(matrix.size());
+    for (int i=0; i< matrix.size(); i++)
+        nodes.push_back(new Node(i));
+
+    // Priority queue to contain node pointers, ordered by the node's g-value
+    std::priority_queue<Node*, std::vector<Node*>, LessThanByG> pq;
+
+    // Push the source node to the qQueue
+    nodes[src]->update_costs(0, heuristic[src]);
+    pq.push(nodes[src]);
+
+    // Run A*
+    Node *current;
+    while (!pq.empty())
+    {
+        // Pop node
+        current = pq.top();
+        pq.pop();
+
+        int id = current->getID();
+
+        // If we reach the destination
+        if (id == dest)
+            break;
+
+        // Push children
+        for (int i=0; i<nodes.size(); i++) {
+            if (matrix[id][i] != 0) {
+                // Child is found in matrix
+                // Update path cost to child and G-value
+                double costToChild = nodes[i]->getPathCost() + current->getPathCost();
+                nodes[i]->update_costs(costToChild, heuristic[i]);
+                // Link the parent to the child
+                nodes[i]->update_parent(current);
+                pq.push(nodes[i]);
+            }
+        }
+    }
+
+    // Path cost
+    double pCost = current->getPathCost();
+
+    // Traverse the parent list to obtain the path
+    std::vector<int> path;
+    while (current->getParent() != nullptr) {
+        path.push_back(current->getID());
+        current = current->getParent();
+    }
+
+    return std::make_pair(pCost, path);
 }
 
 // Takes a make
-void k_shortest_path(std::vector<std::vector<int>> &matrix, std::vector<int> &heuristic, const int &k)
+void k_shortest_path(std::vector<std::vector<double>> &matrix,
+                    std::vector<double> &heuristic,
+                    const int &k,
+                    const int &src,
+                    const int &dest)
 {
     /*
      * For 1 to K:
@@ -152,17 +296,73 @@ void k_shortest_path(std::vector<std::vector<int>> &matrix, std::vector<int> &he
      *      // TODO: need a way to check that second path to third path wont produce first path
      *
      */
+
+
+
+    // Run A* to get the initial shortest path
+    std::vector<int> kShortestPath;
+    double kShortestPathCost;
+    std::tie(kShortestPathCost, kShortestPath)= astar(matrix, heuristic, src, dest);
+
+    // Print initial path
+    std::cout << "k=" << k << ": " << kShortestPathCost << std::endl;
+
+    // For K-iterations
+    for (int i=1; i<k; i++)
+    {
+        // For each node in the last shortest path we will run
+        // A* with that nodes edge disabled (where heuristic=infinity).
+        // We will take the best of those paths as the kth shortest
+        // and permanently make that nodes heuristic=infinity for
+        // the remaining k-1 iterations
+        // This is the node that when the heuristic = infinity, we get the shortest path
+        double minPathCost = DBL_MAX;
+        std::vector<int> minPath;
+        int nodeWithEffect;
+        for (int node : kShortestPath) {
+            // Store the heuristic so we can revert the changes later
+            double prev_h = heuristic[node];
+
+            // Increase heuristic to max to stop A* from choosing that path
+            heuristic[node] = DBL_MAX;
+
+            // Run A* with the update heuristic
+            std::vector<int> currentPath;
+            double currentPathCost;
+            std::tie(currentPathCost, currentPath) = astar(matrix, heuristic, src, dest);
+
+            // Check if that path cost is less than the last
+            if (currentPathCost < minPathCost) {
+                // Update the shortest
+                minPath = currentPath;
+                minPathCost = currentPathCost;
+                nodeWithEffect = node;
+            }
+
+            // Revert the heuristic to it original state
+            heuristic[node] = prev_h;
+        }
+
+        // Shortest kth path is the min_path
+        kShortestPath = minPath;
+        // Update the nodeWithEffect heuristic so it is
+        // not traversed next iteration
+        heuristic[nodeWithEffect] = DBL_MAX;
+
+        // Print the Kth cost
+        std::cout << "k=" << i << ": " << kShortestPathCost << std::endl;
+
+    }
 }
 
 
 int main() {
-    int src = 4;
-    int dst = 2007;
-
     std::string infile = "input_data.txt";
 
-    // Get the adjacency matrix
-    std::vector<std::vector<double>> matrix = load_matrix(infile);
+    // Get the adjacency matrix, the k-value, and the src and dest nodes
+    std::vector<std::vector<double>> matrix;
+    int src, dst;
+    std::tie(src, dst, matrix) = load_matrix(infile);
 
     // Get a transposed copy of the matrix,
     // a transposed matrix is just the original
@@ -175,7 +375,11 @@ int main() {
     // from the destination, we will used these distances as our heuristics
     std::vector<double> heuristic = dijkstra(matrix_t, dst);
 
-    for (auto h : heuristic)
-        std::cout << h << "\n";
+    int k = 3;
+    // Run the K-Shortest path algorithm
+    k_shortest_path(matrix, heuristic, k, src, dst);
+
+
+
     return 0;
 }
